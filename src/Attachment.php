@@ -151,10 +151,10 @@ class Attachment
         // Generate unique filename with ID
         $this->name = uniqid(); // Set the name property for computed path
 
-        $fs = Storage::disk();
+        $fs = Storage::disk($this->disk);
 
         // Move from temp path to final path
-        if (Storage::disk()->exists($this->tempPath)) {
+        if (Storage::disk($this->disk)->exists($this->tempPath)) {
             $fs->move($this->tempPath, $this->getPath());
             $this->persisted = true; // Mark as persisted
             // Update the attachment properties
