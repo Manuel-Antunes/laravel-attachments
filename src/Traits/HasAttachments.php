@@ -56,7 +56,11 @@ trait HasAttachments
                     $data = [];
 
                     if (in_array(AttachmentsAppend::Url, $appends)) {
-                        $data['url'] = $fs->url($path);
+                        if ($fs->getVisibility($path) == "private") {
+                            $data['url'] = $fs->temporaryUrl($path, now()->addMinutes(15));
+                        } else {
+                            $data['url'] = $fs->url($path);
+                        }
                     }
 
                     if (in_array(AttachmentsAppend::Exists, $appends)) {
@@ -187,14 +191,14 @@ trait HasAttachments
 
         if ($this->isAttachmentsPathObfuscationEnabled()) {
             for ($i = 1; $i <= $this->attachmentsPathObfuscationLevels(); $i++) {
-                $path .= $randomStr[random_int(0, strlen($randomStr) - 1)].DIRECTORY_SEPARATOR;
+                $path .= $randomStr[random_int(0, strlen($randomStr) - 1)] . DIRECTORY_SEPARATOR;
             }
         }
 
         $folder = trim($this->attachmentsBaseFolder(), '/');
 
         if ($folder) {
-            $path = $folder.DIRECTORY_SEPARATOR.$path;
+            $path = $folder . DIRECTORY_SEPARATOR . $path;
         }
 
         return trim($path, '/');
