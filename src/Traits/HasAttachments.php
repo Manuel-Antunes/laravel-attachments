@@ -2,225 +2,79 @@
 
 namespace GSMeira\LaravelAttachments\Traits;
 
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Filesystem\FilesystemAdapter;
-use Illuminate\Filesystem\AwsS3V3Adapter;
-use Illuminate\Http\UploadedFile;
-use GSMeira\LaravelAttachments\Enums\AttachmentsAppend;
-use Illuminate\Database\Eloquent\Casts\Attribute;
-use Illuminate\Support\Arr;
+use GSMeira\LaravelAttachments\Attachment;
 
 trait HasAttachments
 {
-    public function attachmentsBaseFolder(): string
-    {
-        return config('attachments.file.base_folder');
-    }
-
-    public function isAttachmentsPathObfuscationEnabled(): bool
-    {
-        return config('attachments.path_obfuscation.enabled');
-    }
-
-    public function attachmentsPathObfuscationLevels(): int
-    {
-        return config('attachments.path_obfuscation.levels');
-    }
-
-    public function attachmentsDisk(): string
-    {
-        return config('filesystems.default');
-    }
+    protected array $attached = [];
+    protected array $detached = [];
 
     public static function bootHasAttachments(): void
     {
-        static::deleted(static function (Model $model) {
-            if (!isset($model->forceDeleting) || $model->forceDeleting) {
-                $model->removeAttachments($model->getCurrentAttachments());
-            }
-        });
-    }
-
-    protected function attachments(): Attribute
-    {
-        return Attribute::make(
-            get: function (?string $value): array {
-                $fs = $this->getAttachmentsFs();
-
-                $attachments = json_decode($value ?: '{}', true);
-
-                $appends = config('attachments.file.appends');
-
-                foreach ($attachments as $attachment => $path) {
-                    $data = [];
-
-                    if (in_array(AttachmentsAppend::Url, $appends)) {
-                        if ($fs->getVisibility($path) == "private") {
-                            $data['url'] = $fs->temporaryUrl($path, now()->addMinutes(15));
+        static::saving(function ($model) {
+            foreach ($model->getCasts() as $field => $cast) {
+                if (str_contains($cast, 'AttachmentCast')) {
+                    // Get the original raw value from database (JSON string)
+                    $originalRawValue = $model->getOriginal($field);
+                    $existingFile = null;
+                    
+                    if ($originalRawValue) {
+                        // If it's already an Attachment object, use it directly
+                        if ($originalRawValue instanceof Attachment) {
+                            $existingFile = $originalRawValue;
                         } else {
-                            $data['url'] = $fs->url($path);
+                            // If it's a JSON string, decode and create Attachment
+                            $originalData = is_string($originalRawValue) 
+                                ? json_decode($originalRawValue, true) 
+                                : $originalRawValue;
+                            $existingFile = $originalData ? Attachment::fromDb($originalData) : null;
                         }
                     }
+                    
+                    $newFile = $model->{$field};
 
-                    if (in_array(AttachmentsAppend::Exists, $appends)) {
-                        $data['exists'] = $fs->has($path);
+                    // Skip when the attachment property hasn't been updated
+                    if ($existingFile === $newFile) {
+                        continue;
                     }
 
-                    if (in_array(AttachmentsAppend::Path, $appends) || !$data) {
-                        $data['path'] = $path;
+                    // There was an existing file, but there is no new file. 
+                    // Hence we must remove the existing file.
+                    if ($existingFile && !$newFile) {
+                        $model->detached[] = $existingFile;
+                        continue;
                     }
 
-                    $attachments[$attachment] = $data ?: $path;
+                    // If there is a new file and it needs to be moved from temp to final location
+                    if ($newFile instanceof Attachment && $newFile->needsMoving()) {
+                        $model->attached[] = $newFile;
+
+                        // If there was an existing file, then we must get rid of it
+                        if ($existingFile) {
+                            $model->detached[] = $existingFile;
+                        }
+
+                        // Move the file from temp to final location with generated ID
+                        $newFile->moveFromTempToFinal();
+                    }
                 }
+            }
+        });
 
-                return $attachments;
-            },
-            set: function (?array $value): ?string {
-                $attachments = null;
+        static::saved(function ($model) {
+            foreach ($model->detached as $file) {
+                $file->delete();
+            }
+            $model->detached = [];
+            $model->attached = [];
+        });
 
-                if ($value) {
-                    $attachments = json_encode($this->mergeAttachments($value));
-                } else {
-                    $this->removeAttachments($this->getCurrentAttachments());
+        static::deleted(function ($model) {
+            foreach ($model->getCasts() as $field => $cast) {
+                if (str_contains($cast, 'AttachmentCast') && $model->{$field}) {
+                    $model->{$field}->delete();
                 }
-
-                return $attachments;
-            },
-        );
-    }
-
-    public function updateAttachments(array $newAttachments): void
-    {
-        $this->update(['attachments' => $newAttachments]);
-    }
-
-    public function deleteAttachment(string|array $key): void
-    {
-        $attachments = $this->getCurrentAttachments();
-
-        if (is_array($key)) {
-            foreach ($key as $k) {
-                $attachments[$k] = null;
             }
-        } else {
-            $attachments[$key] = null;
-        }
-
-        $this->update(compact('attachments'));
-    }
-
-    public function deleteAttachments(): void
-    {
-        $this->update(['attachments' => null]);
-    }
-
-    protected function mergeAttachments(?array $newAttachments): ?array
-    {
-        $currentAttachments = $this->getCurrentAttachments();
-
-        $oldAttchments = [];
-
-        foreach ($newAttachments as $key => $attachment) {
-            if ($this->isAttachmentOld($currentAttachments, $key, $attachment)) {
-                $oldAttchments[$key] = $currentAttachments[$key];
-            }
-
-            if ($this->isAttachmentNew($currentAttachments, $key, $attachment)) {
-                $currentAttachments[$key] = $this->handleAttachment($attachment);
-            }
-
-            if (!$currentAttachments[$key]) {
-                unset($currentAttachments[$key]);
-            }
-        }
-
-        $this->removeAttachments($oldAttchments);
-
-        return $currentAttachments;
-    }
-
-    protected function handleAttachment(mixed $attachment): ?string
-    {
-        if ($attachment instanceof UploadedFile) {
-            return $this->moveFileAttachment($attachment);
-        }
-
-        if (is_array($attachment) && Arr::exists($attachment, 'path')) {
-            return $this->moveSignedFileAttachment($attachment);
-        }
-
-        return null;
-    }
-
-    protected function moveFileAttachment(UploadedFile $attachment): string
-    {
-        return $this->getAttachmentsFs()->putFile($this->generateAttachmentPath(), $attachment);
-    }
-
-    protected function moveSignedFileAttachment(array $attachment): string
-    {
-        $destination = $this->generateAttachmentPath();
-
-        $tempFolder = trim(config('attachments.signed_storage.temp_folder'), '/');
-
-        $path = vsprintf('%s.%s', [
-            str_replace("$tempFolder/", "$destination/", $attachment['path']),
-            pathinfo($attachment['name'], PATHINFO_EXTENSION),
-        ]);
-
-        $this->getAttachmentsFs()->move($attachment['path'], $path);
-
-        return $path;
-    }
-
-    protected function removeAttachments(array $attachments): void
-    {
-        $fs = $this->getAttachmentsFs();
-
-        foreach ($attachments as $key => $path) {
-            $fs->delete($path);
-        }
-    }
-
-    protected function generateAttachmentPath(): string
-    {
-        $path = '';
-
-        $randomStr = md5(uniqid(mt_rand(), true));
-
-        if ($this->isAttachmentsPathObfuscationEnabled()) {
-            for ($i = 1; $i <= $this->attachmentsPathObfuscationLevels(); $i++) {
-                $path .= $randomStr[random_int(0, strlen($randomStr) - 1)] . DIRECTORY_SEPARATOR;
-            }
-        }
-
-        $folder = trim($this->attachmentsBaseFolder(), '/');
-
-        if ($folder) {
-            $path = $folder . DIRECTORY_SEPARATOR . $path;
-        }
-
-        return trim($path, '/');
-    }
-
-    protected function getCurrentAttachments(): array
-    {
-        return json_decode($this->getRawOriginal('attachments') ?: '{}', true);
-    }
-
-    protected function getAttachmentsFs(): FilesystemAdapter|AwsS3V3Adapter
-    {
-        return Storage::disk($this->attachmentsDisk());
-    }
-
-    protected function isAttachmentOld(array $currentAttachments, string $key, UploadedFile|array|string|null $attachment): bool
-    {
-        return Arr::exists($currentAttachments, $key) && $currentAttachments[$key] !== $attachment;
-    }
-
-    protected function isAttachmentNew(array $currentAttachments, string $key, UploadedFile|array|string|null $attachment): bool
-    {
-        return !Arr::exists($currentAttachments, $key) || $currentAttachments[$key] !== $attachment;
+        });
     }
 }

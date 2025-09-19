@@ -26,7 +26,7 @@ class SignedStorageUrlController extends Controller
                 'ContentType' => $request->input('content_type') ?: $this->defaultContentType(),
                 'CacheControl' => $request->input('cache_control') ?: null,
                 'Expires' => $request->input('expires') ?: null,
-                'Bucket' => $request->input('bucket') ?: $_ENV['AWS_BUCKET'],
+                'Bucket' => $request->input('bucket') ?: $_ENV['DRIVE_BUCKET'],
             ])
         );
 

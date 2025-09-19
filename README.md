@@ -33,7 +33,7 @@ An `attachments.php` file will be created in your applications `config` folder.
 **1 —** Set the filesystem disk on your `.env` file.
 
 ```
-FILESYSTEM_DISK=<disk>
+DRIVE_DISK=<disk>
 ```
 
 **2 —** Add a `json` column named `attachments` to your model's table. Also, a `jsonb` column could be used if you are using PostgreSQL.
@@ -234,7 +234,7 @@ When using pre-signed urls, your files will be stored in services like s3 and th
 **1 —** [Configure s3 in your Laravel app](https://laravel-news.com/using-s3-with-laravel) and don't forget to set your filesystem disk to `s3`.
 
 ```
-FILESYSTEM_DISK=s3
+DRIVE_DISK=s3
 ```
 
 **2 —** Set a CORS policy for your bucket in order to send files to it.
@@ -242,16 +242,9 @@ FILESYSTEM_DISK=s3
 ```json
 [
   {
-    "AllowedHeaders": [
-      "*"
-    ],
-    "AllowedMethods": [
-      "GET",
-      "PUT"
-    ],
-    "AllowedOrigins": [
-      "*"
-    ],
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["GET", "PUT"],
+    "AllowedOrigins": ["*"],
     "ExposeHeaders": []
   }
 ]
@@ -289,29 +282,28 @@ Always use the `PreSignedAttachmentRule` to check if the signed file is valid. T
 ```
 
 ```js
-import axios from 'axios'
+import axios from 'axios';
 
-axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest'
+axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 
-const host = 'http://localhost/'
+const host = 'http://localhost/';
 
 async function generatePreSignedUrlAndStore(file) {
-  const response = await axios.post(`${host}/attachments/signed-storage-url`)
+  const response = await axios.post(`${host}/attachments/signed-storage-url`);
 
-  const headers = response.data.headers
+  const headers = response.data.headers;
 
-  if ('Host' in headers)
-    delete headers.Host
+  if ('Host' in headers) delete headers.Host;
 
-  await axios.put(response.data.url, file, { headers })
+  await axios.put(response.data.url, file, { headers });
 
-  response.data.extension = file.name.split('.').pop()
+  response.data.extension = file.name.split('.').pop();
 
-  return response.data
+  return response.data;
 }
 
 document.querySelector('#file').addEventListener('change', (evt) => {
-  const file = evt.target.files[0]
+  const file = evt.target.files[0];
 
   generatePreSignedUrlAndStore(file).then((response) => {
     axios.post(`${host}/profile-image`, {
@@ -320,9 +312,9 @@ document.querySelector('#file').addEventListener('change', (evt) => {
         name: file.name,
         content_type: file.type,
       },
-    })
-  })
-})
+    });
+  });
+});
 ```
 
 ## Tests
