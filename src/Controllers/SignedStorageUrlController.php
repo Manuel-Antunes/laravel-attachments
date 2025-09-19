@@ -38,7 +38,7 @@ class SignedStorageUrlController extends Controller
 
     protected function defaultVisibility(): string
     {
-        return 'private';
+        return config('attachments.signed_storage.visibility', 'private');
     }
 
     protected function defaultContentType(): string
